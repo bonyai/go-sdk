@@ -48,6 +48,9 @@ type request struct {
 	bearer string
 	// idempotencyKey makes a mutation safe to resend.
 	idempotencyKey string
+	// idempotent marks a call that is safe to resend by nature (delete,
+	// pause, renew, ...), so it is retried without a key.
+	idempotent bool
 	// sandboxID is attached to errors.
 	sandboxID string
 	// stream: the caller reads the body; no default timeout is applied.
@@ -61,7 +64,7 @@ func (r *request) repeatable() bool {
 	if r.singleShot {
 		return false
 	}
-	return r.method == http.MethodGet || r.method == http.MethodHead || r.idempotencyKey != ""
+	return r.method == http.MethodGet || r.method == http.MethodHead || r.idempotent || r.idempotencyKey != ""
 }
 
 // newIdempotencyKey returns a random key for one logical mutation. Reuse it
