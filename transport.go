@@ -199,7 +199,7 @@ func (c *Client) newHTTPRequest(ctx context.Context, req *request) (*http.Reques
 	httpReq.Header.Set("Accept", "application/json")
 	if req.bearer != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+req.bearer)
-	} else {
+	} else if c.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 		if c.organizationID != "" {
 			httpReq.Header.Set(organizationHeader, c.organizationID)
