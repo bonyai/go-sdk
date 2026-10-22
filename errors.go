@@ -106,6 +106,7 @@ var codeKinds = map[string]error{
 	"snapshot_limit_reached": ErrLimitReached,
 	"payload_too_large":      ErrTooLarge,
 	"exec_timeout":           ErrTimeout,
+	"rate_limited":           ErrRateLimited,
 	"capacity_unavailable":   ErrNoCapacity,
 	"no_capacity":            ErrNoCapacity,
 	"upstream_unavailable":   ErrUnavailable,
