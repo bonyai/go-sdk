@@ -30,23 +30,43 @@ type DeviceLoginOptions struct {
 	HTTPClient *http.Client
 }
 
-// DeviceLogin is a pending browser login for a command-line tool. Show
-// VerificationURL to the user, then call Wait.
+// DeviceLogin is a pending browser login for a command-line tool. Show the
+// user UserCode and VerificationURL (or open VerificationURLComplete), then
+// call Wait.
+//
+// The login has two codes. The device code, which Wait polls with, stays
+// inside this value and is never shown. The user code only lets a signed-in
+// user approve the login, so the URLs and the user code are safe to show;
+// whoever approves gets the key delivered here, not to their browser.
 type DeviceLogin struct {
-	// VerificationURL is the page where the user approves the login. It
-	// carries the login's one-time token: show it only to the user.
+	// UserCode is the short code the user confirms or types on the approval
+	// page, shown as XXXX-XXXX (case and dash do not matter).
+	UserCode string
+	// VerificationURL is the approval page, without a code.
 	VerificationURL string
+	// VerificationURLComplete is the approval page with UserCode filled in;
+	// open it in the user's browser when you can.
+	VerificationURLComplete string
 	// ExpiresAt is when the login stops being approvable.
 	ExpiresAt time.Time
 	// Interval is how often Wait polls, as the service advised.
 	Interval time.Duration
 
-	client *Client
-	token  string
+	client     *Client
+	deviceCode string
 
 	mu     sync.Mutex
 	result *DeviceLoginResult
 }
+
+// String describes the login without its device code. String and fmt verbs
+// never print the device code.
+func (d *DeviceLogin) String() string {
+	return "device login " + d.UserCode + " at " + d.VerificationURL
+}
+
+// GoString keeps %#v from printing the device code.
+func (d *DeviceLogin) GoString() string { return d.String() }
 
 // DeviceLoginResult is the outcome of an approved device login.
 type DeviceLoginResult struct {
@@ -65,27 +85,34 @@ func (r DeviceLoginResult) String() string {
 // GoString keeps %#v from printing the API key.
 func (r DeviceLoginResult) GoString() string { return r.String() }
 
-// StartDeviceLogin begins a browser login. The user opens VerificationURL,
-// signs in and approves; Wait then returns a new API key for that user.
+// StartDeviceLogin begins a browser login. The user opens
+// VerificationURLComplete (or VerificationURL and enters UserCode), signs in
+// and approves; Wait then returns a new API key for that user.
 func StartDeviceLogin(ctx context.Context, opts DeviceLoginOptions) (*DeviceLogin, error) {
 	c, err := newDeviceLoginClient(opts)
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
-		Token           string `json:"token"`
-		VerificationURL string `json:"verification_url"`
-		ExpiresIn       int    `json:"expires_in"`
-		Interval        int    `json:"interval"`
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURL         string `json:"verification_url"`
+		VerificationURLComplete string `json:"verification_url_complete"`
+		ExpiresIn               int    `json:"expires_in"`
+		Interval                int    `json:"interval"`
 	}
 	req := &request{method: http.MethodPost, path: "/v1/device-login", json: struct{}{}}
 	if err := c.doJSON(ctx, req, &out); err != nil {
 		return nil, err
 	}
-	if out.Token == "" || out.VerificationURL == "" {
-		return nil, &Error{Kind: ErrInternal, Message: "device login response is missing its token or verification URL"}
+	if out.DeviceCode == "" || out.UserCode == "" || out.VerificationURL == "" || out.VerificationURLComplete == "" {
+		return nil, &Error{Kind: ErrInternal, Message: "device login response is missing a code or verification URL"}
 	}
 	verificationURL, err := resolveVerificationURL(c.apiURL, out.VerificationURL)
+	if err != nil {
+		return nil, err
+	}
+	verificationURLComplete, err := resolveVerificationURL(c.apiURL, out.VerificationURLComplete)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +123,14 @@ func StartDeviceLogin(ctx context.Context, opts DeviceLoginOptions) (*DeviceLogi
 	if interval < deviceLoginMinInterval {
 		interval = deviceLoginMinInterval
 	}
-	login := &DeviceLogin{VerificationURL: verificationURL, Interval: interval, client: c, token: out.Token}
+	login := &DeviceLogin{
+		UserCode:                out.UserCode,
+		VerificationURL:         verificationURL,
+		VerificationURLComplete: verificationURLComplete,
+		Interval:                interval,
+		client:                  c,
+		deviceCode:              out.DeviceCode,
+	}
 	if out.ExpiresIn > 0 {
 		login.ExpiresAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
 	}
@@ -128,7 +162,7 @@ func (d *DeviceLogin) Wait(ctx context.Context) (*DeviceLoginResult, error) {
 			APIKey    string `json:"api_key"`
 			UserEmail string `json:"user_email"`
 		}
-		req := &request{method: http.MethodPost, path: "/v1/device-login/poll", json: map[string]string{"token": d.token}}
+		req := &request{method: http.MethodPost, path: "/v1/device-login/poll", json: map[string]string{"device_code": d.deviceCode}}
 		err := d.client.doJSON(ctx, req, &out)
 		wait := interval
 		var sdkErr *Error
@@ -229,7 +263,6 @@ func newDeviceLoginClient(opts DeviceLoginOptions) (*Client, error) {
 func resolveVerificationURL(base *url.URL, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		// The URL carries the login token; keep it out of the error.
 		return "", &Error{Kind: ErrInternal, Message: "device login verification URL is not valid"}
 	}
 	if u.IsAbs() {
