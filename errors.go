@@ -35,6 +35,10 @@ var (
 	ErrRateLimited = errors.New("rate limited")
 	// ErrTooLarge: the request body or file is larger than allowed.
 	ErrTooLarge = errors.New("too large")
+	// ErrTimeout: the command ran past its timeout and was stopped. Running
+	// it again would time out the same way; the Message says whether the
+	// stop was confirmed.
+	ErrTimeout = errors.New("timed out")
 	// ErrNoCapacity: no capacity to start or wake the sandbox now; retry
 	// after RetryAfter.
 	ErrNoCapacity = errors.New("no capacity")
@@ -101,6 +105,7 @@ var codeKinds = map[string]error{
 	"snapshot_in_use":        ErrSnapshotInUse,
 	"snapshot_limit_reached": ErrLimitReached,
 	"payload_too_large":      ErrTooLarge,
+	"exec_timeout":           ErrTimeout,
 	"capacity_unavailable":   ErrNoCapacity,
 	"no_capacity":            ErrNoCapacity,
 	"upstream_unavailable":   ErrUnavailable,
