@@ -117,7 +117,7 @@ func (c *Client) do(ctx context.Context, req *request) (*http.Response, error) {
 				continue
 			}
 		}
-		if attempt >= c.maxRetries || !req.repeatable() || !retryable(sdkErr) {
+		if attempt >= c.maxRetries || !req.repeatable() || !retryable(req, sdkErr) {
 			cancel()
 			return nil, err
 		}
@@ -251,10 +251,15 @@ func transportError(ctx context.Context, req *request, err error) *Error {
 	}
 	var opErr *net.OpError
 	notSent := errors.As(err, &opErr) && opErr.Op == "dial"
+	readOnly := req.method == http.MethodGet || req.method == http.MethodHead
 	switch {
-	case notSent || req.repeatable():
+	case notSent || readOnly:
 		e.Kind = ErrUnavailable
 		e.Message = "could not reach the service: " + err.Error()
+	case req.repeatable():
+		// The mutation may have run; repeating it (same key) is safe.
+		e.Kind = ErrOutcomeUnknown
+		e.Message = "connection failed after the request was sent; repeating it is safe: " + err.Error()
 	default:
 		e.Kind = ErrOutcomeUnknown
 		e.Message = "connection failed after the request was sent: " + err.Error()
@@ -262,10 +267,18 @@ func transportError(ctx context.Context, req *request, err error) *Error {
 	return e
 }
 
-func retryable(e *Error) bool {
+func retryable(req *request, e *Error) bool {
 	if e.cause != nil && (errors.Is(e.cause, context.Canceled) || errors.Is(e.cause, context.DeadlineExceeded)) {
 		return false
 	}
+	if e.Kind == ErrOutcomeUnknown {
+		return req.repeatable()
+	}
+	return transient(e)
+}
+
+// transient reports a failure that did nothing and may pass if repeated.
+func transient(e *Error) bool {
 	return e.Kind == ErrUnavailable || e.Kind == ErrNoCapacity || e.Kind == ErrRateLimited
 }
 
