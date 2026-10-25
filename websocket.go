@@ -177,6 +177,9 @@ func (c *Client) wsDialer() *websocket.Dialer {
 		d.NetDialContext = t.DialContext
 		if t.TLSClientConfig != nil {
 			d.TLSClientConfig = t.TLSClientConfig.Clone()
+			// net/http adds "h2" to its TLS config after the first HTTPS
+			// request; a WebSocket upgrade needs HTTP/1.1.
+			d.TLSClientConfig.NextProtos = []string{"http/1.1"}
 		}
 	}
 	return d
