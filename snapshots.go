@@ -32,7 +32,9 @@ type Snapshot struct {
 	Name            string
 	State           SnapshotState
 	TemplateVersion string
-	ManifestDigest  string
+	// Image is the source image and resolved digest; nil for the default template.
+	Image          *Image
+	ManifestDigest string
 	// FileBytes is the size of the captured files; zero until published.
 	FileBytes int64
 	// StoredBytes is what the snapshot adds to storage; zero until published.
@@ -54,6 +56,7 @@ type snapshotWire struct {
 	Name            string     `json:"name"`
 	State           string     `json:"state"`
 	TemplateVersion string     `json:"template_version"`
+	Image           *Image     `json:"image,omitempty"`
 	ManifestDigest  string     `json:"manifest_digest,omitempty"`
 	FileBytes       *int64     `json:"file_bytes,omitempty"`
 	StoredBytes     *int64     `json:"stored_bytes,omitempty"`
@@ -77,6 +80,7 @@ func (p *Snapshot) apply(w snapshotWire) {
 	p.Name = w.Name
 	p.State = SnapshotState(w.State)
 	p.TemplateVersion = w.TemplateVersion
+	p.Image = w.Image
 	p.ManifestDigest = w.ManifestDigest
 	p.FileBytes = derefInt64(w.FileBytes)
 	p.StoredBytes = derefInt64(w.StoredBytes)

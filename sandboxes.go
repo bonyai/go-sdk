@@ -14,6 +14,10 @@ import (
 // The client's default timeout is meant for quick calls.
 const longCallTimeout = 5 * time.Minute
 
+// imageCreateTimeout covers a full image pull and the service's create retry.
+// Snapshot restores can also pull an image, even when its source is unknown here.
+const imageCreateTimeout = 9 * time.Minute
+
 // Wait intervals for WaitRunning and for repeating an unfinished snapshot or
 // fork.
 const (
@@ -26,6 +30,9 @@ const (
 type CreateOptions struct {
 	// Name is the sandbox's friendly name; empty generates one.
 	Name string
+	// Image creates the sandbox from this public container image reference.
+	// It accepts a tag or digest and cannot be combined with Snapshot.
+	Image string
 	// Snapshot creates the sandbox from this named snapshot id instead of
 	// the default template (a restore). The new sandbox boots the snapshot's
 	// files with fresh processes.
@@ -41,6 +48,9 @@ type CreateOptions struct {
 // sandbox is still creating; call WaitRunning. A sandbox that failed to
 // start is returned as an ErrUnavailable error; retry with a new key.
 func (c *Client) Create(ctx context.Context, opts CreateOptions) (*Sandbox, error) {
+	if opts.Image != "" && opts.Snapshot != "" {
+		return nil, invalidArgument("image and snapshot cannot both be set; a snapshot already fixes the image")
+	}
 	key := opts.IdempotencyKey
 	if key == "" {
 		key = newIdempotencyKey()
@@ -48,8 +58,13 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*Sandbox, erro
 	body := struct {
 		Snapshot string `json:"snapshot,omitempty"`
 		Name     string `json:"name,omitempty"`
-	}{Snapshot: opts.Snapshot, Name: opts.Name}
-	ctx, cancel := withLongTimeout(ctx)
+		Image    string `json:"image,omitempty"`
+	}{Snapshot: opts.Snapshot, Name: opts.Name, Image: opts.Image}
+	timeout := longCallTimeout
+	if opts.Image != "" || opts.Snapshot != "" {
+		timeout = imageCreateTimeout
+	}
+	ctx, cancel := withCallTimeout(ctx, timeout)
 	defer cancel()
 	var out sandboxWire
 	if err := c.doJSON(ctx, &request{
@@ -303,10 +318,14 @@ func (s *Sandbox) WaitRunning(ctx context.Context) error {
 // withLongTimeout gives a call that waits for real work a longer default
 // deadline than the client's.
 func withLongTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withCallTimeout(ctx, longCallTimeout)
+}
+
+func withCallTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, longCallTimeout)
+	return context.WithTimeout(ctx, timeout)
 }
 
 // sleepCtx waits for d or until ctx ends, returning ctx's error then.

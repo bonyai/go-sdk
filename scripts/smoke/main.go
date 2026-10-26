@@ -44,6 +44,14 @@ func main() {
 		fmt.Println("FAIL  client:", err)
 		os.Exit(1)
 	}
+	if image := os.Getenv("BONYA_SMOKE_IMAGE"); image != "" {
+		imageSmoke(ctx, client, image)
+		fmt.Printf("RESULT %d failure(s)\n", failures)
+		if failures > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 
 	// The key owner's organizations (API keys may list them since the beta fixes).
 	if orgs, err := client.ListOrganizations(ctx); err != nil {
@@ -65,6 +73,11 @@ func main() {
 		os.Exit(1)
 	}
 	info("created %s in %s, state %s", sb.ID, time.Since(begun).Round(time.Millisecond), sb.State)
+	if sb.Image == nil {
+		pass("default create has no image metadata")
+	} else {
+		fail("default create unexpectedly has image metadata: %+v", sb.Image)
+	}
 	var cleanup []*bonya.Sandbox
 	cleanup = append(cleanup, sb)
 	defer func() {

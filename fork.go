@@ -2,7 +2,9 @@ package bonya
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 )
 
 // MaxForkCount is the most children one Fork call may create.
@@ -66,6 +68,11 @@ func (s *Sandbox) Fork(ctx context.Context, opts ForkOptions) (*ForkResult, erro
 			sandboxID:      s.ID,
 			idempotencyKey: key,
 		}, &out); err != nil {
+			var serviceErr *Error
+			if errors.As(err, &serviceErr) && serviceErr.Code == "lifecycle_conflict" &&
+				strings.Contains(serviceErr.Message, "forking a gVisor sandbox is not supported") {
+				serviceErr.Message = "forking an image-based sandbox is not supported yet; create a named snapshot and new sandboxes from it"
+			}
 			return nil, err
 		}
 		unfinished := len(out.Sandboxes) == 0

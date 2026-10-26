@@ -4,6 +4,7 @@
 # the test key from its mode-600 file (never printed), and runs scripts/smoke.
 #   KEY_FILE   API key file (default ~/k8s-scratch/key.txt)
 #   API_PORT / EDGE_PORT  local forward ports (default 18080 / 18081)
+#   BONYA_SMOKE_IMAGE    run the focused image checks, e.g. alpine:3.21
 set -euo pipefail
 cd "$(dirname "$0")/.."
 KEY_FILE=${KEY_FILE:-$HOME/k8s-scratch/key.txt}
@@ -21,8 +22,9 @@ for port in "$API_PORT" "$EDGE_PORT"; do
   for _ in $(seq 50); do curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break; sleep 0.2; done
 done
 
-go build -o "$TMPDIR/bonya-sdk-smoke" ./scripts/smoke
+SMOKE_BIN=$TMPDIR/bonya-sdk-smoke-$API_PORT
+go build -o "$SMOKE_BIN" ./scripts/smoke
 BONYA_API_KEY=$(tr -d '[:space:]' <"$KEY_FILE") \
 BONYA_ENDPOINT=http://127.0.0.1:$API_PORT \
 BONYA_EDGE_ENDPOINT=http://127.0.0.1:$EDGE_PORT \
-  "$TMPDIR/bonya-sdk-smoke"
+  "$SMOKE_BIN"

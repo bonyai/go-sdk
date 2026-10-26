@@ -33,10 +33,12 @@ const (
 // once returned, but its fields are not updated concurrently-safely: call
 // Refresh from one goroutine.
 type Sandbox struct {
-	ID               string
-	Name             string
-	OrganizationID   string
-	TemplateVersion  string
+	ID              string
+	Name            string
+	OrganizationID  string
+	TemplateVersion string
+	// Image is the image source and resolved digest; nil for the default template.
+	Image            *Image
 	State            State
 	Generation       int64
 	VCPUs            int32
@@ -53,12 +55,21 @@ type Sandbox struct {
 	cap    *capability
 }
 
+// Image identifies a sandbox's or snapshot's public container image.
+type Image struct {
+	// Reference is the normalized image reference supplied at creation.
+	Reference string `json:"reference"`
+	// Digest is the resolved immutable manifest digest, once the image is resolved.
+	Digest string `json:"digest,omitempty"`
+}
+
 // sandboxWire is the service's sandbox object.
 type sandboxWire struct {
 	ID                string     `json:"id"`
 	Name              string     `json:"name"`
 	OrganizationID    string     `json:"organization_id"`
 	TemplateVersion   string     `json:"template_version"`
+	Image             *Image     `json:"image,omitempty"`
 	State             string     `json:"state"`
 	Generation        int64      `json:"generation"`
 	VCPUs             int32      `json:"vcpus"`
@@ -87,6 +98,7 @@ func (s *Sandbox) apply(w sandboxWire) {
 	s.Name = w.Name
 	s.OrganizationID = w.OrganizationID
 	s.TemplateVersion = w.TemplateVersion
+	s.Image = w.Image
 	s.State = State(w.State)
 	s.Generation = w.Generation
 	s.VCPUs = w.VCPUs
