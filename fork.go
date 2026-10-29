@@ -38,6 +38,11 @@ type ForkResult struct {
 // finishes or ctx ends. A child that failed to start is returned with State
 // failed rather than as an error. A cold source must be woken first
 // (Keepalive).
+//
+// A running source is paused while its memory is written (about 1 s per
+// 186 MB). Its open exec streams, terminal attachments and file transfers
+// are reset and must reconnect: attachments do so by themselves, and an exec
+// is reattached by running it again with the same IdempotencyKey.
 func (s *Sandbox) Fork(ctx context.Context, opts ForkOptions) (*ForkResult, error) {
 	count := opts.Count
 	if count == 0 {
