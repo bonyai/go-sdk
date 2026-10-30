@@ -355,16 +355,19 @@ type ExitStatus struct {
 	Signaled bool
 	// Signal is the signal number when Signaled is true.
 	Signal int
+	// TimedOut reports that the sandbox stopped the command at its Timeout.
+	TimedOut bool
 }
 
 type exitWire struct {
 	ExitCode int32 `json:"exit_code"`
 	Signaled bool  `json:"signaled"`
 	Signal   int32 `json:"signal"`
+	TimedOut bool  `json:"timed_out"`
 }
 
 func (w exitWire) status() *ExitStatus {
-	return &ExitStatus{ExitCode: int(w.ExitCode), Signaled: w.Signaled, Signal: int(w.Signal)}
+	return &ExitStatus{ExitCode: int(w.ExitCode), Signaled: w.Signaled, Signal: int(w.Signal), TimedOut: w.TimedOut}
 }
 
 func parseExit(payload []byte, sandboxID string) (*ExitStatus, error) {

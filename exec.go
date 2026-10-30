@@ -26,7 +26,22 @@ const (
 	// execCancelWait is how long a stopped stream waits for the command's
 	// exit after asking it to stop.
 	execCancelWait = 5 * time.Second
+	// streamTimeoutGrace lets the sandbox's own stop at Timeout arrive
+	// before the SDK cancels the stream itself.
+	streamTimeoutGrace = 2 * time.Second
 )
+
+// timeoutMillis converts a Timeout for the wire (0: no limit).
+func timeoutMillis(timeout time.Duration) uint32 {
+	ms := timeout.Milliseconds()
+	switch {
+	case ms <= 0:
+		return 0
+	case ms > int64(^uint32(0)):
+		return ^uint32(0)
+	}
+	return uint32(ms)
+}
 
 // ExecOptions describes a command to run in a sandbox.
 type ExecOptions struct {
@@ -37,7 +52,9 @@ type ExecOptions struct {
 	// WorkingDir is the directory the command starts in.
 	WorkingDir string
 	// Timeout bounds the command. For Exec without a stream, zero means the
-	// service default (60 s); the service caps it at 10 minutes.
+	// service default (60 s); the service caps it at 10 minutes. On a stream
+	// the sandbox stops the command at Timeout even if the connection breaks
+	// (ExitStatus.TimedOut); zero means no limit.
 	Timeout time.Duration
 	// IdempotencyKey identifies this run. The SDK picks a random one when it
 	// is empty. Running again with the same key never starts a second
@@ -45,6 +62,10 @@ type ExecOptions struct {
 	// status (while the sandbox still remembers the key, 10 minutes after
 	// exit). Set it yourself to recover after ErrOutcomeUnknown.
 	IdempotencyKey string
+	// AttachOnly (ExecStream only) attaches to the process of
+	// IdempotencyKey and never starts the command: an unknown key is
+	// ErrNotFound. Use it to watch or Cancel a run whose stream broke.
+	AttachOnly bool
 
 	// Stdin is copied to the command's stdin, which is then closed.
 	// Setting it runs the command over a stream.
@@ -68,6 +89,9 @@ func (o *ExecOptions) validate() error {
 	}
 	if !o.TTY && (o.Cols != 0 || o.Rows != 0) {
 		return invalidArgument("cols and rows need TTY")
+	}
+	if o.AttachOnly && o.IdempotencyKey == "" {
+		return invalidArgument("attach-only needs the run's IdempotencyKey")
 	}
 	return checkDimensions(o.Cols, o.Rows, false)
 }
@@ -155,7 +179,7 @@ func (s *Sandbox) ExecWithOptions(ctx context.Context, opts ExecOptions) (*ExecR
 	if opts.IdempotencyKey == "" {
 		opts.IdempotencyKey = newIdempotencyKey()
 	}
-	if opts.streamed() {
+	if opts.streamed() || opts.AttachOnly {
 		return s.execCollect(ctx, opts)
 	}
 
@@ -298,6 +322,8 @@ type execStartWire struct {
 	TTY        bool              `json:"tty,omitempty"`
 	Cols       uint32            `json:"cols,omitempty"`
 	Rows       uint32            `json:"rows,omitempty"`
+	TimeoutMS  uint32            `json:"timeout_ms,omitempty"`
+	AttachOnly bool              `json:"attach_only,omitempty"`
 }
 
 // ExecStream starts a command over a stream and returns once it is sent.
@@ -325,6 +351,8 @@ func (s *Sandbox) ExecStream(ctx context.Context, opts ExecOptions) (*ExecStream
 		TTY:        opts.TTY,
 		Cols:       uint32(opts.Cols),
 		Rows:       uint32(opts.Rows),
+		TimeoutMS:  timeoutMillis(opts.Timeout),
+		AttachOnly: opts.AttachOnly,
 	}
 	if err := ws.sendJSON(frameStart, start); err != nil {
 		ws.closeNormal()
@@ -342,7 +370,9 @@ func (s *Sandbox) ExecStream(ctx context.Context, opts ExecOptions) (*ExecStream
 	}
 	runCtx, cancel := ctx, context.CancelFunc(func() {})
 	if opts.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		// The sandbox stops it at Timeout and reports TimedOut; this is the
+		// fallback for an older sandbox that ignores timeout_ms.
+		runCtx, cancel = context.WithTimeout(ctx, opts.Timeout+streamTimeoutGrace)
 	}
 	e.cancel = cancel
 	e.stopWatch = context.AfterFunc(runCtx, func() { e.stop(context.Cause(runCtx)) })
