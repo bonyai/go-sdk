@@ -43,10 +43,10 @@ type JobScheduleSpec struct {
 
 type scheduleWire struct {
 	CronExpressions []string `json:"cron_expressions,omitempty"`
-	IntervalSeconds int      `json:"interval_s,omitempty"`
+	IntervalSeconds int      `json:"interval_seconds,omitempty"`
 	RunAtNanos      int64    `json:"run_at_unix_nanos,omitempty"`
 	TimeZone        string   `json:"time_zone,omitempty"`
-	JitterSeconds   int      `json:"jitter_s,omitempty"`
+	JitterSeconds   int      `json:"jitter_seconds,omitempty"`
 	Overlap         Overlap  `json:"overlap,omitempty"`
 	Paused          bool     `json:"paused"`
 	Job             JobSpec  `json:"job"`
@@ -98,10 +98,10 @@ func (s JobScheduleSpec) wire() (scheduleWire, error) {
 // JobScheduleTiming is the timing a schedule reports.
 type JobScheduleTiming struct {
 	CronExpressions []string `json:"cron_expressions,omitempty"`
-	IntervalSeconds int      `json:"interval_s,omitempty"`
+	IntervalSeconds int      `json:"interval_seconds,omitempty"`
 	RunAtNanos      int64    `json:"run_at_unix_nanos,omitempty"`
 	TimeZone        string   `json:"time_zone,omitempty"`
-	JitterSeconds   int      `json:"jitter_s,omitempty"`
+	JitterSeconds   int      `json:"jitter_seconds,omitempty"`
 	Overlap         Overlap  `json:"overlap,omitempty"`
 }
 
@@ -154,23 +154,19 @@ func schedulePath(id string, parts ...string) (string, error) {
 	return p, nil
 }
 
-type scheduleEnvelope struct {
-	Schedule JobSchedule `json:"schedule"`
-}
-
 // CreateJobSchedule creates a schedule.
 func (c *Client) CreateJobSchedule(ctx context.Context, spec JobScheduleSpec) (*JobSchedule, error) {
 	w, err := spec.wire()
 	if err != nil {
 		return nil, err
 	}
-	var out scheduleEnvelope
+	var out JobSchedule
 	if err := c.doJSON(ctx, &request{
 		method: http.MethodPost, path: "/v1/job-schedule", json: w, idempotencyKey: keyOrNew(spec.IdempotencyKey),
 	}, &out); err != nil {
 		return nil, err
 	}
-	return &out.Schedule, nil
+	return &out, nil
 }
 
 // GetJobSchedule returns one schedule.
@@ -179,11 +175,11 @@ func (c *Client) GetJobSchedule(ctx context.Context, scheduleID string) (*JobSch
 	if err != nil {
 		return nil, err
 	}
-	var out scheduleEnvelope
+	var out JobSchedule
 	if err := c.doJSON(ctx, &request{method: http.MethodGet, path: path}, &out); err != nil {
 		return nil, err
 	}
-	return &out.Schedule, nil
+	return &out, nil
 }
 
 // UpdateJobSchedule replaces a schedule's timing and job.
@@ -196,11 +192,11 @@ func (c *Client) UpdateJobSchedule(ctx context.Context, scheduleID string, spec 
 	if err != nil {
 		return nil, err
 	}
-	var out scheduleEnvelope
+	var out JobSchedule
 	if err := c.doJSON(ctx, &request{method: http.MethodPatch, path: path, json: w, idempotent: true}, &out); err != nil {
 		return nil, err
 	}
-	return &out.Schedule, nil
+	return &out, nil
 }
 
 // DeleteJobSchedule deletes a schedule. Runs it already started continue.
@@ -223,11 +219,11 @@ func (c *Client) SetJobSchedulePaused(ctx context.Context, scheduleID string, pa
 		Paused bool   `json:"paused"`
 		Note   string `json:"note,omitempty"`
 	}{paused, note}
-	var out scheduleEnvelope
+	var out JobSchedule
 	if err := c.doJSON(ctx, &request{method: http.MethodPost, path: path, json: body, idempotent: true}, &out); err != nil {
 		return nil, err
 	}
-	return &out.Schedule, nil
+	return &out, nil
 }
 
 // TriggerJobSchedule fires one run immediately, overriding the schedule's own
