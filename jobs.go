@@ -71,11 +71,6 @@ type JobSpec struct {
 	IdempotencyKey string `json:"-"`
 }
 
-type jobWire struct {
-	JobSpec
-	Wait bool `json:"wait,omitempty"`
-}
-
 // JobStart is the answer to StartJob.
 type JobStart struct {
 	RunID string `json:"run_id"`
@@ -109,8 +104,16 @@ const (
 	JobTerminated JobStatus = "terminated"
 )
 
-// Done reports whether the run has ended.
-func (s JobStatus) Done() bool { return s != JobRunning && s != "" }
+// Done reports whether the run has ended. Only the known final statuses count:
+// an unrecognized status (one a newer server adds) is treated as still in
+// progress, so a polling loop keeps going rather than stopping early.
+func (s JobStatus) Done() bool {
+	switch s {
+	case JobCompleted, JobFailed, JobCanceled, JobTimedOut, JobTerminated:
+		return true
+	}
+	return false
+}
 
 // JobRun is one run of a job.
 type JobRun struct {
@@ -205,6 +208,11 @@ func pageQuery(size int, token string) (url.Values, error) {
 }
 
 func checkJobSpec(spec JobSpec) error {
+	switch spec.Disposition {
+	case "", DispositionDelete, DispositionKeep:
+	default:
+		return invalidArgument("Disposition must be \"delete\" or \"keep\"")
+	}
 	if (spec.ExistingSandboxID == "") == (spec.NewSandbox == nil) {
 		return invalidArgument("set exactly one of ExistingSandboxID and NewSandbox")
 	}
@@ -220,47 +228,50 @@ func (c *Client) StartJob(ctx context.Context, spec JobSpec) (*JobStart, error) 
 	if err := checkJobSpec(spec); err != nil {
 		return nil, err
 	}
-	key := spec.IdempotencyKey
-	if key == "" {
-		key = newIdempotencyKey()
-	}
 	var out JobStart
 	if err := c.doJSON(ctx, &request{
 		method:         http.MethodPost,
 		path:           "/v1/job",
-		json:           jobWire{JobSpec: spec},
-		idempotencyKey: key,
+		json:           spec,
+		idempotencyKey: keyOrNew(spec.IdempotencyKey),
 	}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-// RunJob runs a job and waits for it to end. The wait is bounded by ctx, or by
-// a five-minute default when ctx has no deadline; for a longer job use StartJob
-// and GetJobRun.
+// RunJob starts a job and waits for it to end, polling GetJobRun.
+//
+// The wait is bounded by ctx, or by a five-minute default when ctx has no
+// deadline. If the wait ends first, RunJob returns the error together with a
+// non-nil *JobRun that carries the run id (the run keeps going on the
+// service), so the caller can keep polling with GetJobRun or stop it with
+// CancelJobRun. When the job could not be started at all the *JobRun is nil.
 func (c *Client) RunJob(ctx context.Context, spec JobSpec) (*JobRun, error) {
-	if err := checkJobSpec(spec); err != nil {
-		return nil, err
-	}
-	key := spec.IdempotencyKey
-	if key == "" {
-		key = newIdempotencyKey()
-	}
 	ctx, cancel := withLongTimeout(ctx)
 	defer cancel()
-	var out struct {
-		Run JobRun `json:"run"`
-	}
-	if err := c.doJSON(ctx, &request{
-		method:         http.MethodPost,
-		path:           "/v1/job",
-		json:           jobWire{JobSpec: spec, Wait: true},
-		idempotencyKey: key,
-	}, &out); err != nil {
+	start, err := c.StartJob(ctx, spec)
+	if err != nil {
 		return nil, err
 	}
-	return &out.Run, nil
+	run := &JobRun{ID: start.RunID, Status: JobRunning}
+	delay := pollStart
+	for {
+		detail, err := c.GetJobRun(ctx, start.RunID)
+		if err != nil {
+			return run, err
+		}
+		run = &detail.JobRun
+		if run.Status.Done() {
+			return run, nil
+		}
+		if err := sleepCtx(ctx, delay); err != nil {
+			return run, &Error{Kind: ErrTimeout, Message: "stopped waiting for job run " + start.RunID + "; it is still running", cause: err}
+		}
+		if delay *= 2; delay > pollMax {
+			delay = pollMax
+		}
+	}
 }
 
 // GetJobRun returns a run's full detail, including the spec that started it
@@ -311,22 +322,50 @@ func (c *Client) ListJobRuns(ctx context.Context, opts ListJobRunsOptions) (*Job
 // ListAllJobRuns iterates over every page of a listing. It stops after the
 // first error, which it yields once.
 func (c *Client) ListAllJobRuns(ctx context.Context, opts ListJobRunsOptions) iter.Seq2[JobRun, error] {
-	return func(yield func(JobRun, error) bool) {
+	return paginate(func(token string) ([]JobRun, string, error) {
+		o := opts
+		if token != "" {
+			o.PageToken = token
+		}
+		page, err := c.ListJobRuns(ctx, o)
+		if err != nil {
+			return nil, "", err
+		}
+		return page.Runs, page.NextPageToken, nil
+	})
+}
+
+// keyOrNew returns key, or a fresh idempotency key when it is empty. Callers
+// keep the result across their own retries.
+func keyOrNew(key string) string {
+	if key != "" {
+		return key
+	}
+	return newIdempotencyKey()
+}
+
+// paginate yields every item of a paged listing. page fetches the page after
+// token (empty for the first) and returns its items and the next token. It
+// stops after the first error, which it yields once.
+func paginate[T any](page func(token string) ([]T, string, error)) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		token := ""
 		for {
-			page, err := c.ListJobRuns(ctx, opts)
+			items, next, err := page(token)
 			if err != nil {
-				yield(JobRun{}, err)
+				var zero T
+				yield(zero, err)
 				return
 			}
-			for _, r := range page.Runs {
-				if !yield(r, nil) {
+			for _, it := range items {
+				if !yield(it, nil) {
 					return
 				}
 			}
-			if page.NextPageToken == "" {
+			if next == "" {
 				return
 			}
-			opts.PageToken = page.NextPageToken
+			token = next
 		}
 	}
 }

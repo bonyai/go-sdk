@@ -48,11 +48,22 @@ type scheduleWire struct {
 	TimeZone        string   `json:"time_zone,omitempty"`
 	JitterSeconds   int      `json:"jitter_s,omitempty"`
 	Overlap         Overlap  `json:"overlap,omitempty"`
-	Paused          bool     `json:"paused,omitempty"`
+	Paused          bool     `json:"paused"`
 	Job             JobSpec  `json:"job"`
 }
 
 func (s JobScheduleSpec) wire() (scheduleWire, error) {
+	if s.IntervalSeconds < 0 || s.JitterSeconds < 0 {
+		return scheduleWire{}, invalidArgument("IntervalSeconds and JitterSeconds must not be negative")
+	}
+	switch s.Overlap {
+	case "", OverlapSkip, OverlapBufferOne, OverlapAllowAll:
+	default:
+		return scheduleWire{}, invalidArgument("Overlap must be \"skip\", \"buffer_one\" or \"allow_all\"")
+	}
+	if !s.RunAt.IsZero() && (s.RunAt.Year() < 1970 || s.RunAt.Year() > 2200) {
+		return scheduleWire{}, invalidArgument("RunAt is out of range")
+	}
 	n := 0
 	if len(s.CronExpressions) > 0 {
 		n++
@@ -104,7 +115,9 @@ type JobSchedule struct {
 	// NextRunAtNanos is when the schedule fires next; zero when none.
 	NextRunAtNanos int64 `json:"next_run_at_unix_nanos,omitempty"`
 	OneShot        bool  `json:"one_shot"`
-	// RemainingActions is set for one-shots; 0 once spent.
+	// RemainingActions counts the fires a one-shot has left (0 once spent).
+	// It is 0 for every other schedule too: check OneShot before reading 0
+	// as "spent".
 	RemainingActions int `json:"remaining_actions,omitempty"`
 	// AvailableActions is what the caller may do now: pause, resume, trigger,
 	// update, delete.
@@ -151,13 +164,9 @@ func (c *Client) CreateJobSchedule(ctx context.Context, spec JobScheduleSpec) (*
 	if err != nil {
 		return nil, err
 	}
-	key := spec.IdempotencyKey
-	if key == "" {
-		key = newIdempotencyKey()
-	}
 	var out scheduleEnvelope
 	if err := c.doJSON(ctx, &request{
-		method: http.MethodPost, path: "/v1/job-schedule", json: w, idempotencyKey: key,
+		method: http.MethodPost, path: "/v1/job-schedule", json: w, idempotencyKey: keyOrNew(spec.IdempotencyKey),
 	}, &out); err != nil {
 		return nil, err
 	}
@@ -248,23 +257,11 @@ func (c *Client) ListJobSchedules(ctx context.Context, pageSize int, pageToken s
 // ListAllJobSchedules iterates over every schedule. It stops after the first
 // error, which it yields once.
 func (c *Client) ListAllJobSchedules(ctx context.Context, pageSize int) iter.Seq2[JobSchedule, error] {
-	return func(yield func(JobSchedule, error) bool) {
-		token := ""
-		for {
-			page, err := c.ListJobSchedules(ctx, pageSize, token)
-			if err != nil {
-				yield(JobSchedule{}, err)
-				return
-			}
-			for _, s := range page.Schedules {
-				if !yield(s, nil) {
-					return
-				}
-			}
-			if page.NextPageToken == "" {
-				return
-			}
-			token = page.NextPageToken
+	return paginate(func(token string) ([]JobSchedule, string, error) {
+		page, err := c.ListJobSchedules(ctx, pageSize, token)
+		if err != nil {
+			return nil, "", err
 		}
-	}
+		return page.Schedules, page.NextPageToken, nil
+	})
 }
