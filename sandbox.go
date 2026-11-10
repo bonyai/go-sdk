@@ -50,6 +50,8 @@ type Sandbox struct {
 	DeletedAt        *time.Time
 	ParentSnapshotID string
 	PauseSource      string
+	// Network is the sandbox's egress policy.
+	Network *NetworkPolicy
 
 	client *Client
 	cap    *capability
@@ -65,23 +67,24 @@ type Image struct {
 
 // sandboxWire is the service's sandbox object.
 type sandboxWire struct {
-	ID                string     `json:"id"`
-	Name              string     `json:"name"`
-	OrganizationID    string     `json:"organization_id"`
-	TemplateVersion   string     `json:"template_version"`
-	Image             *Image     `json:"image,omitempty"`
-	State             string     `json:"state"`
-	Generation        int64      `json:"generation"`
-	VCPUs             int32      `json:"vcpus"`
-	MemoryMiB         int64      `json:"memory_mib"`
-	UserLayerBytes    int64      `json:"user_layer_bytes"`
-	FailureReason     string     `json:"failure_reason,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	StartedAt         *time.Time `json:"started_at,omitempty"`
-	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
-	ParentSnapshotID  string     `json:"parent_snapshot_id,omitempty"`
-	PauseSource       string     `json:"pause_source,omitempty"`
-	ExecCapabilityJWS string     `json:"exec_capability_jws,omitempty"`
+	ID                string         `json:"id"`
+	Name              string         `json:"name"`
+	OrganizationID    string         `json:"organization_id"`
+	TemplateVersion   string         `json:"template_version"`
+	Image             *Image         `json:"image,omitempty"`
+	State             string         `json:"state"`
+	Generation        int64          `json:"generation"`
+	VCPUs             int32          `json:"vcpus"`
+	MemoryMiB         int64          `json:"memory_mib"`
+	UserLayerBytes    int64          `json:"user_layer_bytes"`
+	FailureReason     string         `json:"failure_reason,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	StartedAt         *time.Time     `json:"started_at,omitempty"`
+	DeletedAt         *time.Time     `json:"deleted_at,omitempty"`
+	ParentSnapshotID  string         `json:"parent_snapshot_id,omitempty"`
+	PauseSource       string         `json:"pause_source,omitempty"`
+	Network           *NetworkPolicy `json:"network,omitempty"`
+	ExecCapabilityJWS string         `json:"exec_capability_jws,omitempty"`
 }
 
 // newSandbox builds a handle from a service response.
@@ -110,6 +113,7 @@ func (s *Sandbox) apply(w sandboxWire) {
 	s.DeletedAt = w.DeletedAt
 	s.ParentSnapshotID = w.ParentSnapshotID
 	s.PauseSource = w.PauseSource
+	s.Network = w.Network
 	if w.ExecCapabilityJWS != "" {
 		s.cap.set(w.ExecCapabilityJWS, tokenExpiry(w.ExecCapabilityJWS))
 	}

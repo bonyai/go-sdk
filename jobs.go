@@ -2,6 +2,7 @@ package bonya
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"net/http"
 	"net/url"
@@ -13,19 +14,39 @@ import (
 // by the service; a larger program belongs in the template.
 type JobScript struct {
 	// Body is the script text.
-	Body []byte `json:"body_b64"`
+	Body scriptBody `json:"body"`
 	// Interpreter runs the script; empty means "sh".
 	Interpreter string   `json:"interpreter,omitempty"`
 	Args        []string `json:"args,omitempty"`
 	Filename    string   `json:"filename,omitempty"`
 }
 
+// scriptBody is script text. It is sent and received as a JSON string.
+type scriptBody []byte
+
+func (b scriptBody) MarshalJSON() ([]byte, error) { return json.Marshal(string(b)) }
+
+func (b *scriptBody) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	*b = scriptBody(text)
+	return nil
+}
+
 // JobNewSandbox asks a job to create its own sandbox.
 type JobNewSandbox struct {
-	// TemplateID is empty to use the deployment's default template.
-	TemplateID string `json:"template_id,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Name       string `json:"name,omitempty"`
+	// TemplateID is empty to use the default image.
+	TemplateID       string            `json:"template_id,omitempty"`
+	TemplateRevision int               `json:"template_revision,omitempty"`
+	Snapshot         string            `json:"snapshot,omitempty"`
+	Image            string            `json:"image,omitempty"`
+	Name             string            `json:"name,omitempty"`
+	Network          *NetworkPolicy    `json:"network,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	// SecretSets are secret set names injected into the sandbox.
+	SecretSets []string `json:"secret_sets,omitempty"`
 }
 
 // Disposition says what happens to a sandbox a job created once it ends.
@@ -45,25 +66,27 @@ type JobSpec struct {
 	Name              string         `json:"name,omitempty"`
 	ExistingSandboxID string         `json:"existing_sandbox_id,omitempty"`
 	NewSandbox        *JobNewSandbox `json:"new_sandbox,omitempty"`
-	Cmd               []string       `json:"cmd,omitempty"`
+	Cmd               []string       `json:"command,omitempty"`
 	Script            *JobScript     `json:"script,omitempty"`
 	// PreRunScript runs after the sandbox is ready and before the job; a
 	// non-zero exit stops the job.
 	PreRunScript *JobScript        `json:"pre_run_script,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
+	// SecretSets are secret set names injected into the run.
+	SecretSets []string `json:"secret_sets,omitempty"`
 	// Path is the working directory.
-	Path  string `json:"path,omitempty"`
+	Path  string `json:"working_dir,omitempty"`
 	Stdin []byte `json:"stdin_b64,omitempty"`
 	// CommandTimeoutSeconds bounds the command; RunDeadlineSeconds bounds the
 	// whole run. Zero uses the service defaults.
-	CommandTimeoutSeconds int `json:"command_timeout_s,omitempty"`
-	RunDeadlineSeconds    int `json:"run_deadline_s,omitempty"`
-	MaxOutputBytes        int `json:"max_output_bytes,omitempty"`
+	CommandTimeoutSeconds int `json:"command_timeout_seconds,omitempty"`
+	RunDeadlineSeconds    int `json:"run_deadline_seconds,omitempty"`
+	MaxOutputBytes        int `json:"-"`
 	// Disposition applies to a sandbox the run created; empty means delete.
 	Disposition Disposition `json:"disposition,omitempty"`
 	// ResumeIfSuspended lets the run resume a suspended existing sandbox,
 	// which is billable. When false a suspended target fails the run.
-	ResumeIfSuspended bool `json:"resume_if_suspended,omitempty"`
+	ResumeIfSuspended bool `json:"wake_if_paused,omitempty"`
 
 	// IdempotencyKey makes starting the job safe to repeat: the same key joins
 	// the first call's run. Empty generates one per call, kept across the
@@ -82,14 +105,26 @@ type JobStart struct {
 // JobResult is a finished command's outcome. A non-zero ExitCode is a
 // completed run, not a failed one.
 type JobResult struct {
-	ExitCode        int    `json:"exit_code"`
-	Signaled        bool   `json:"signaled"`
-	Signal          int    `json:"signal,omitempty"`
-	TimedOut        bool   `json:"timed_out"`
-	Stdout          []byte `json:"stdout_b64"`
-	Stderr          []byte `json:"stderr_b64"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
+	ExitCode        int        `json:"exit_code"`
+	Signaled        bool       `json:"signaled"`
+	Signal          int        `json:"signal,omitempty"`
+	TimedOut        bool       `json:"timed_out"`
+	Stdout          resultText `json:"stdout"`
+	Stderr          resultText `json:"stderr"`
+	StdoutTruncated bool       `json:"stdout_truncated"`
+	StderrTruncated bool       `json:"stderr_truncated"`
+}
+
+// resultText is captured output. It is received as a JSON string.
+type resultText []byte
+
+func (t *resultText) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	*t = resultText(text)
+	return nil
 }
 
 // JobStatus is the state of a run.
@@ -281,13 +316,11 @@ func (c *Client) GetJobRun(ctx context.Context, runID string) (*JobRunDetail, er
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Run JobRunDetail `json:"run"`
-	}
+	var out JobRunDetail
 	if err := c.doJSON(ctx, &request{method: http.MethodGet, path: path}, &out); err != nil {
 		return nil, err
 	}
-	return &out.Run, nil
+	return &out, nil
 }
 
 // CancelJobRun requests cancellation. The run's own cleanup (such as deleting

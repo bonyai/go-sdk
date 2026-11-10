@@ -37,6 +37,20 @@ type CreateOptions struct {
 	// the default template (a restore). The new sandbox boots the snapshot's
 	// files with fresh processes.
 	Snapshot string
+	// TemplateID starts the sandbox from a saved template; TemplateRevision
+	// pins a revision (0 is the latest). Cannot be combined with Image or
+	// Snapshot.
+	TemplateID       string
+	TemplateRevision int
+	// GPU requests GPUs (see ListGPUOptions). It needs Image or an image
+	// template.
+	GPU *GPURequest
+	// Network sets the egress policy.
+	Network *NetworkPolicy
+	// Env sets environment variables.
+	Env map[string]string
+	// SecretSets are secret set names injected into the sandbox.
+	SecretSets []string
 	// IdempotencyKey makes the create safe to repeat: a second call with the
 	// same key returns the first call's sandbox. Empty generates one per
 	// call, which the SDK keeps across its own retries.
@@ -55,13 +69,22 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) (*Sandbox, erro
 	if key == "" {
 		key = newIdempotencyKey()
 	}
+	if opts.TemplateID != "" && (opts.Image != "" || opts.Snapshot != "") {
+		return nil, invalidArgument("TemplateID cannot be combined with Image or Snapshot")
+	}
 	body := struct {
-		Snapshot string `json:"snapshot,omitempty"`
-		Name     string `json:"name,omitempty"`
-		Image    string `json:"image,omitempty"`
-	}{Snapshot: opts.Snapshot, Name: opts.Name, Image: opts.Image}
+		Snapshot         string            `json:"snapshot,omitempty"`
+		Name             string            `json:"name,omitempty"`
+		Image            string            `json:"image,omitempty"`
+		TemplateID       string            `json:"template_id,omitempty"`
+		TemplateRevision int               `json:"template_revision,omitempty"`
+		GPU              *GPURequest       `json:"gpu,omitempty"`
+		Network          *NetworkPolicy    `json:"network,omitempty"`
+		Env              map[string]string `json:"env,omitempty"`
+		SecretSets       []string          `json:"secret_sets,omitempty"`
+	}{opts.Snapshot, opts.Name, opts.Image, opts.TemplateID, opts.TemplateRevision, opts.GPU, opts.Network, opts.Env, opts.SecretSets}
 	timeout := longCallTimeout
-	if opts.Image != "" || opts.Snapshot != "" {
+	if opts.Image != "" || opts.Snapshot != "" || opts.TemplateID != "" {
 		timeout = imageCreateTimeout
 	}
 	ctx, cancel := withCallTimeout(ctx, timeout)
@@ -127,6 +150,10 @@ type ListOptions struct {
 	PageSize int
 	// PageToken continues a listing from a previous page's NextPageToken.
 	PageToken string
+	// Name keeps only sandboxes with this exact name. The service has no
+	// name filter, so the SDK filters each page: a page may come back short
+	// or empty while NextPageToken is set.
+	Name string
 }
 
 // SandboxPage is one page of a listing.
@@ -165,6 +192,9 @@ func (c *Client) List(ctx context.Context, opts ListOptions) (*SandboxPage, erro
 	}
 	page := &SandboxPage{Sandboxes: make([]*Sandbox, 0, len(out.Sandboxes)), NextPageToken: out.NextPageToken}
 	for _, w := range out.Sandboxes {
+		if opts.Name != "" && w.Name != opts.Name {
+			continue
+		}
 		page.Sandboxes = append(page.Sandboxes, c.newSandbox(w))
 	}
 	return page, nil
